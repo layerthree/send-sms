@@ -1,0 +1,141 @@
+#!/usr/bin/env perl
+#
+# Utility for sending text messages via CM Direct SMS gateway service
+# 
+# License: GPL v3
+# Author: Michael van den Berg
+#
+# Copyright (c) 2013 LayerThree B.V. <http://www.layerthree.nl>
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+#
+# #####################################################################
+#
+# This utility is meant to be used via the SMS Gateway Direct services
+# of CM Telcom <http://www.cmtelecom.nl>
+# 
+# #####################################################################
+
+use strict;
+use XML::Simple;
+use WWW::Curl::Easy;
+use POSIX qw(strftime);
+use Getopt::Long qw(:config no_ignore_case_always auto_version);
+
+# Customizations - Put in the default recipient country code here
+my $country_code = "31";    # Country code for the Netherlands is 31
+
+# Defaults
+my $version = "1.0";
+(my $script_name = $0) =~ s/.\///;
+my $sms_gateway = "https://secure.cm.nl/smssgateway/cm/gateway.ashx";
+my $now = strftime "%Y-%m-%d,%k:%M:%S", localtime;
+
+# Arguments
+GetOptions ('s=s'    => \my $sender,         # required
+            'r=s'    => \my $recipient_list, # required
+	    'm=s'    => \my $text,           # optional
+	    't=s'    => \my $token	     # required
+	);
+
+# If no text is suppoed via cli argument then get it from STDIN
+if (!defined($text)){
+        $text = <STDIN>;
+        chomp($text);
+}
+
+# Help / Version info
+if (!defined $sender || !defined $recipient_list || !defined $token){
+	print "$script_name v$version Usage:\n";
+	print "   echo \"message\" \| $script_name -t <auth token> -s <fromname> -r <recipient number>,<recipient number>,<recipient number etc>\n";
+	print "     or\n";
+	print "   $script_name -t <auth token> -s <fromname> -r <recipient number>,<recipient number>,<recipient number etc> -m \"message\"\n";
+	exit 1;
+}
+
+# Supplied recipient is treated as a comma separated list of phone numbers
+my @recipients = split(",",$recipient_list);
+
+foreach my $recipient(@recipients){
+	$recipient =~ s/\s//g;  # Strip white spaces
+
+	# Build XML payload for sending to the SMS gateway
+	my $message = buildxmlpayload($sender,format_recipient_no($recipient),$text,$token);
+	
+	# Send XML payload to the SMS gateway
+	my $sms_result = sendsms($sms_gateway, $message);
+
+	# Output
+	$text =~ s/\R/\|/g;   # Remove linefeeds from output for logging
+	print "$now,$sender,$recipient,\"$text\",$sms_result\n";
+
+	#Debug
+	#print "$message\n";
+}
+
+sub format_recipient_no{
+  # Format phone numbers to leading 00 international format if needed
+	my $ph_number = @_[0];
+
+        $ph_number =~ s/\s//g;                                          	# Remove leading and trailing spaces
+        $ph_number =~ s/^\+/00/;                                   		# Replace + with two zeros
+        $ph_number =~ s/^0(?!0)/00$country_code/;         	               	# Add two leading zeros and country code if needed
+	$ph_number = "00".$ph_number if ($ph_number =~ /^$country_code/);   	# Add two leading zeros if missing from number
+
+        return $ph_number
+}
+
+sub buildxmlpayload{
+  # Build XML data and return in plaintext
+	my ($sms_sender, $sms_recipient, $sms_text, $product_token) = @_;
+	my $xml_decl = '<?xml version="1.0"?>';
+
+	my $xml = new XML::Simple;
+	my $xml_data 	=	{ 'AUTHENTICATION' => [
+                     		 {  'PRODUCTTOKEN' => [$product_token] } ],
+                    		  'MSG' => [
+                      		 {  'FROM' => [$sms_sender],
+                       		    'TO'   => [$sms_recipient],
+                       		    'BODY' => [$sms_text]
+                      		} ] };
+
+	return $xml->XMLout($xml_data, XMLDecl => $xml_decl, RootName => 'MESSAGES');	
+}
+
+sub sendsms{
+  # Send SMS message to SMS Gateway of CM Direct
+	my ($gateway_url, $xml_payload) = @_;
+	my @http_header = ("Content-Type: text/xml","Content-length: ".length($xml_payload));
+
+	my $curl = WWW::Curl::Easy->new;
+	
+	$curl->setopt(CURLOPT_URL,$gateway_url);
+	$curl->setopt(CURLOPT_POST,1);
+	$curl->setopt(CURLOPT_HTTPHEADER,\@http_header);
+	$curl->setopt(CURLOPT_POSTFIELDS,$xml_payload);
+	$curl->setopt(CURLOPT_WRITEDATA,\my $response_body);
+	
+	my $result = $curl->perform;
+	my $response_code = $curl->getinfo(CURLINFO_HTTP_CODE);
+
+	if ($response_code == 200 && $result == 0) {
+		return $response_body ? $response_body : "Success";
+	}else{
+		if($response_code){
+			return "Failure: HTTP ".$response_code." error";
+		}else{
+			return "Failure: ".$curl->errbuf;
+		}
+	}
+}

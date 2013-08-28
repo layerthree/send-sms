@@ -1,0 +1,41 @@
+send-sms
+========
+
+Script to send text messages via an SMS Gateway
+
+This script is designed to use the CM Direct SMS gateway services by CM Telcom. More information on this service can be found at <http://www.cmtelecom.com/text-messaging-services/sms-gateway/sms-gateway-direct>.
+
+Message text can be piped to the script via another program using <STDIN> or using a cli argument. Run the script without arguments to see general usage and available arguments.
+
+
+Nagios Config Example (modify to your own config)
+=====================
+
+Add to commands.cfg
+-------------------
+
+# 'notify-host-by-sms' command definition
+define command{
+        command_name    notify-host-by-sms
+        command_line    /usr/bin/printf "%b" "** $HOSTNAME$ **\rFrom: `hostname`\rState: $HOSTSTATE$\r$HOSTOUTPUT$" | $USER1$/send-sms -s "Nagios" -r $CONTACTPAGER$ -t "<product token>"  >> /usr/local/nagios/var/sms.log
+}
+
+# 'notify-service-by-sms' command definition
+define command{
+        command_name    notify-service-by-sms
+        command_line    /usr/bin/printf "%b" "** $HOSTNAME$ **\rFrom: `hostname`\rService: $SERVICEDESC$\rState: $SERVICESTATE$\r$SERVICEOUTPUT$" | $USER1$/send-sms -s "Nagios" -r $CONTACTPAGER$ -t "<product token" >> /usr/local/nagios/var/sms.log
+}
+
+
+Add to contacts.cfg
+-------------------
+
+define contact{
+        contact_name                    nagiosadmin
+        use                             generic-contact
+        alias                           Nagios Admin
+        service_notification_commands   notify-service-by-email,notify-service-by-sms
+        host_notification_commands      notify-host-by-email,notify-host-by-sms
+        email                           root@localhost
+	pager				0031612345678	# Phone number
+}
